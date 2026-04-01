@@ -71,8 +71,11 @@ class JsonModel:
     the original dict (including unknown fields) for serialization.
     """
 
-    def __init__(self, raw: dict[str, Any] | None = None, **kwargs: Any) -> None:
-        if raw is not None:
+    def __init__(self, raw: dict[str, Any] | None = None, _ref: dict[str, Any] | None = None, **kwargs: Any) -> None:
+        if _ref is not None:
+            # Share the same dict — mutations write through to parent
+            self._raw = _ref
+        elif raw is not None:
             self._raw = dict(raw)
         else:
             self._raw = {}
@@ -191,11 +194,11 @@ class ProfileManifest(JsonModel):
 
     @property
     def device(self) -> DeviceInfo:
-        return DeviceInfo(raw=self._get("Device", {}))
+        return DeviceInfo(_ref=self._raw.setdefault("Device", {}))
 
     @property
     def pages(self) -> PageRef:
-        return PageRef(raw=self._get("Pages", {}))
+        return PageRef(_ref=self._raw.setdefault("Pages", {}))
 
     @pages.setter
     def pages(self, v: PageRef) -> None:
@@ -334,7 +337,8 @@ class PageManifest(JsonModel):
 
     @property
     def controllers(self) -> list[Controller]:
-        return [Controller(raw=c) for c in self._get("Controllers", [])]
+        ctrls = self._raw.setdefault("Controllers", [])
+        return [Controller(_ref=c) for c in ctrls]
 
     @property
     def name(self) -> str:
