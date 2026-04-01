@@ -216,5 +216,37 @@ def export_cmd(profile: str, page: str | None) -> None:
     click.echo(json.dumps(data.to_dict(), indent=2))
 
 
+@cli.command("exec")
+@click.argument("profile")
+@click.argument("page", required=False)
+@click.argument("position", required=False)
+def exec_cmd(profile: str, page: str | None, position: str | None) -> None:
+    """Execute a button action natively.
+
+    If PAGE is omitted, uses the current page.
+    POSITION is col,row (e.g., 0,0).
+    """
+    from deck.executor import UnsupportedActionError, execute
+
+    s = _get_store()
+    profile_id = _resolve_profile(s, profile)
+    if page is None:
+        prof = s.load_profile(profile_id)
+        page = prof.pages.current
+    if position is None:
+        click.echo("Position required (e.g., 0,0)", err=True)
+        sys.exit(1)
+    action = s.get_button(profile_id, page, position)
+    if action is None:
+        click.echo(f"No button at position {position}", err=True)
+        sys.exit(1)
+    try:
+        result = execute(action.to_dict())
+        click.echo(result)
+    except UnsupportedActionError as e:
+        click.echo(f"Cannot execute: {e}", err=True)
+        sys.exit(1)
+
+
 if __name__ == "__main__":
     cli()
