@@ -4,7 +4,6 @@ version = "0.1.0"
 description = "Manage Elgato Stream Deck profiles, pages, and buttons programmatically"
 requires-python = ">=3.12"
 dependencies = [
-    "pydantic>=2.0",
     "click>=8.0",
 ]
 

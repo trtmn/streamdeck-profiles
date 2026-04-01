@@ -112,7 +112,7 @@ def button_info(profile: str, page: str, position: str) -> None:
     if action is None:
         click.echo(f"No button at position {position}", err=True)
         sys.exit(1)
-    click.echo(json.dumps(action.model_dump(by_alias=True, exclude_unset=True), indent=2))
+    click.echo(json.dumps(action.to_dict(), indent=2))
 
 
 @cli.command("remove-button")
@@ -213,7 +213,7 @@ def export_cmd(profile: str, page: str | None) -> None:
         data = s.load_page(profile_id, page)
     else:
         data = s.load_profile(profile_id)
-    click.echo(json.dumps(data.model_dump(by_alias=True, exclude_unset=True), indent=2))
+    click.echo(json.dumps(data.to_dict(), indent=2))
 
 
 if __name__ == "__main__":

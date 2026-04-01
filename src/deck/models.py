@@ -1,7 +1,7 @@
-"""Pydantic models for Elgato Stream Deck V3 profile format.
+"""Models for Elgato Stream Deck V3 profile format.
 
-These models faithfully represent the on-disk JSON structure so that
-load → serialize round-trips produce identical output.
+Pure stdlib — no Pydantic. Round-trip JSON fidelity is achieved by storing
+the original dict and only applying typed access on top.
 """
 
 from __future__ import annotations
@@ -10,8 +10,6 @@ import uuid
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any
-
-from pydantic import BaseModel, ConfigDict, Field
 
 
 # ---------------------------------------------------------------------------
@@ -27,7 +25,6 @@ class Position:
 
     @classmethod
     def from_key(cls, key: str) -> Position:
-        """Parse a 'col,row' string like '3,1'."""
         col, row = key.split(",")
         return cls(int(col), int(row))
 
@@ -64,107 +61,292 @@ class DeviceLayout(Enum):
 
 
 # ---------------------------------------------------------------------------
-# JSON models — use PascalCase aliases to match Elgato's format
+# JSON model base — thin wrapper over dicts for round-trip fidelity
 # ---------------------------------------------------------------------------
 
-class _BaseModel(BaseModel):
-    """Base with PascalCase alias support and extra-field passthrough."""
+class JsonModel:
+    """Base class that wraps a raw JSON dict.
 
-    model_config = ConfigDict(
-        populate_by_name=True,
-        extra="allow",
-    )
+    Provides typed property access via PascalCase keys while preserving
+    the original dict (including unknown fields) for serialization.
+    """
 
+    def __init__(self, raw: dict[str, Any] | None = None, **kwargs: Any) -> None:
+        if raw is not None:
+            self._raw = dict(raw)
+        else:
+            self._raw = {}
+        # Apply kwargs using alias mapping
+        alias_map = self._alias_map()
+        for py_name, value in kwargs.items():
+            alias = alias_map.get(py_name, py_name)
+            self._raw[alias] = self._to_raw(value)
 
-class DeviceInfo(_BaseModel):
-    model: str = Field(alias="Model")
-    uuid: str = Field(alias="UUID")
+    @classmethod
+    def _alias_map(cls) -> dict[str, str]:
+        """Override to define python_name -> JsonKey mapping."""
+        return {}
 
+    @classmethod
+    def _reverse_alias_map(cls) -> dict[str, str]:
+        return {v: k for k, v in cls._alias_map().items()}
 
-class PageRef(_BaseModel):
-    current: str = Field(alias="Current")
-    default: str = Field(alias="Default")
-    pages: list[str] = Field(alias="Pages")
+    def _get(self, alias: str, default: Any = None) -> Any:
+        return self._raw.get(alias, default)
 
+    def _set(self, alias: str, value: Any) -> None:
+        self._raw[alias] = self._to_raw(value)
 
-class ProfileManifest(_BaseModel):
-    """Top-level profile manifest (the .sdProfile/manifest.json)."""
+    @staticmethod
+    def _to_raw(value: Any) -> Any:
+        if isinstance(value, JsonModel):
+            return value.to_dict()
+        if isinstance(value, list):
+            return [JsonModel._to_raw(v) for v in value]
+        if isinstance(value, dict):
+            return {k: JsonModel._to_raw(v) for k, v in value.items()}
+        return value
 
-    name: str = Field(alias="Name")
-    device: DeviceInfo = Field(alias="Device")
-    pages: PageRef = Field(alias="Pages")
-    version: str = Field(default="3.0", alias="Version")
-    app_identifier: str | None = Field(default=None, alias="AppIdentifier")
-    backgrounds: dict[str, str] | None = Field(default=None, alias="Backgrounds")
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize back to a JSON-compatible dict, preserving all original keys."""
+        return self._raw
 
-
-class ButtonState(_BaseModel):
-    """Visual state of a button (title, icon, font, etc.)."""
-
-    title: str | None = Field(default=None, alias="Title")
-    title_alignment: str | None = Field(default=None, alias="TitleAlignment")
-    title_color: str | None = Field(default=None, alias="TitleColor")
-    font_family: str | None = Field(default=None, alias="FontFamily")
-    font_size: int | None = Field(default=None, alias="FontSize")
-    font_style: str | None = Field(default=None, alias="FontStyle")
-    font_underline: bool | None = Field(default=None, alias="FontUnderline")
-    outline_thickness: int | None = Field(default=None, alias="OutlineThickness")
-    show_title: bool | None = Field(default=None, alias="ShowTitle")
-    image: str | None = Field(default=None, alias="Image")
-
-
-class PluginInfo(_BaseModel):
-    """Plugin that provides an action."""
-
-    name: str = Field(alias="Name")
-    uuid: str = Field(alias="UUID")
-    version: str = Field(alias="Version")
+    @classmethod
+    def from_dict(cls, raw: dict[str, Any]) -> "JsonModel":
+        return cls(raw=raw)
 
 
-class ActionGroup(_BaseModel):
-    """A group of actions within a Multi Action."""
+# ---------------------------------------------------------------------------
+# Concrete models
+# ---------------------------------------------------------------------------
 
-    actions: list[Action] = Field(alias="Actions")
+class DeviceInfo(JsonModel):
+    @classmethod
+    def _alias_map(cls) -> dict[str, str]:
+        return {"model": "Model", "uuid": "UUID"}
+
+    @property
+    def model(self) -> str:
+        return self._get("Model", "")
+
+    @model.setter
+    def model(self, v: str) -> None:
+        self._set("Model", v)
+
+    @property
+    def uuid(self) -> str:
+        return self._get("UUID", "")
+
+    @uuid.setter
+    def uuid(self, v: str) -> None:
+        self._set("UUID", v)
 
 
-class Action(_BaseModel):
-    """A single button action on the Stream Deck grid."""
+class PageRef(JsonModel):
+    @classmethod
+    def _alias_map(cls) -> dict[str, str]:
+        return {"current": "Current", "default": "Default", "pages": "Pages"}
 
-    action_id: str = Field(alias="ActionID")
-    uuid: str = Field(alias="UUID")
-    name: str = Field(alias="Name")
-    linked_title: bool = Field(default=True, alias="LinkedTitle")
-    plugin: PluginInfo | None = Field(default=None, alias="Plugin")
-    resources: Any | None = Field(default=None, alias="Resources")
-    settings: dict[str, Any] | None = Field(default=None, alias="Settings")
-    state: int = Field(default=0, alias="State")
-    states: list[ButtonState] = Field(default_factory=list, alias="States")
-    # Multi Action nesting — can contain ActionGroups or bare Actions
-    actions: list[ActionGroup | Action] | None = Field(default=None, alias="Actions")
+    @property
+    def current(self) -> str:
+        return self._get("Current", "")
+
+    @current.setter
+    def current(self, v: str) -> None:
+        self._set("Current", v)
+
+    @property
+    def default(self) -> str:
+        return self._get("Default", "")
+
+    @default.setter
+    def default(self, v: str) -> None:
+        self._set("Default", v)
+
+    @property
+    def pages(self) -> list[str]:
+        return self._get("Pages", [])
+
+    @pages.setter
+    def pages(self, v: list[str]) -> None:
+        self._set("Pages", v)
+
+
+class ProfileManifest(JsonModel):
+    @classmethod
+    def _alias_map(cls) -> dict[str, str]:
+        return {
+            "name": "Name", "device": "Device", "pages": "Pages",
+            "version": "Version", "app_identifier": "AppIdentifier",
+            "backgrounds": "Backgrounds",
+        }
+
+    @property
+    def name(self) -> str:
+        return self._get("Name", "")
+
+    @name.setter
+    def name(self, v: str) -> None:
+        self._set("Name", v)
+
+    @property
+    def device(self) -> DeviceInfo:
+        return DeviceInfo(raw=self._get("Device", {}))
+
+    @property
+    def pages(self) -> PageRef:
+        return PageRef(raw=self._get("Pages", {}))
+
+    @pages.setter
+    def pages(self, v: PageRef) -> None:
+        self._set("Pages", v)
+
+    @property
+    def version(self) -> str:
+        return self._get("Version", "3.0")
+
+    @property
+    def app_identifier(self) -> str | None:
+        return self._get("AppIdentifier")
+
+
+class ButtonState(JsonModel):
+    @classmethod
+    def _alias_map(cls) -> dict[str, str]:
+        return {
+            "title": "Title", "title_alignment": "TitleAlignment",
+            "title_color": "TitleColor", "font_family": "FontFamily",
+            "font_size": "FontSize", "font_style": "FontStyle",
+            "font_underline": "FontUnderline", "outline_thickness": "OutlineThickness",
+            "show_title": "ShowTitle", "image": "Image",
+        }
+
+    @property
+    def title(self) -> str | None:
+        return self._get("Title")
+
+    @property
+    def image(self) -> str | None:
+        return self._get("Image")
+
+    @image.setter
+    def image(self, v: str | None) -> None:
+        self._set("Image", v)
+
+
+class PluginInfo(JsonModel):
+    @classmethod
+    def _alias_map(cls) -> dict[str, str]:
+        return {"name": "Name", "uuid": "UUID", "version": "Version"}
+
+    @property
+    def name(self) -> str:
+        return self._get("Name", "")
+
+    @property
+    def uuid(self) -> str:
+        return self._get("UUID", "")
+
+    @property
+    def version(self) -> str:
+        return self._get("Version", "")
+
+
+class Action(JsonModel):
+    @classmethod
+    def _alias_map(cls) -> dict[str, str]:
+        return {
+            "action_id": "ActionID", "uuid": "UUID", "name": "Name",
+            "linked_title": "LinkedTitle", "plugin": "Plugin",
+            "resources": "Resources", "settings": "Settings",
+            "state": "State", "states": "States", "actions": "Actions",
+        }
+
+    @property
+    def action_id(self) -> str:
+        return self._get("ActionID", "")
+
+    @property
+    def uuid(self) -> str:
+        return self._get("UUID", "")
+
+    @property
+    def name(self) -> str:
+        return self._get("Name", "")
+
+    @name.setter
+    def name(self, v: str) -> None:
+        self._set("Name", v)
+
+    @property
+    def plugin(self) -> PluginInfo | None:
+        raw = self._get("Plugin")
+        return PluginInfo(raw=raw) if raw else None
+
+    @property
+    def settings(self) -> dict[str, Any] | None:
+        return self._get("Settings")
+
+    @property
+    def states(self) -> list[ButtonState]:
+        return [ButtonState(raw=s) for s in self._get("States", [])]
+
+    @property
+    def actions(self) -> list[dict[str, Any]] | None:
+        return self._get("Actions")
 
     @staticmethod
     def new_id() -> str:
-        """Generate a new unique ActionID."""
         return str(uuid.uuid4())
 
 
-class Controller(_BaseModel):
-    """A controller (always 'Keypad' in practice)."""
+class Controller(JsonModel):
+    @classmethod
+    def _alias_map(cls) -> dict[str, str]:
+        return {"type": "Type", "actions": "Actions"}
 
-    type: str = Field(alias="Type")
-    actions: dict[str, Action] | None = Field(default=None, alias="Actions")
+    @property
+    def type(self) -> str:
+        return self._get("Type", "")
+
+    @property
+    def actions(self) -> dict[str, Action] | None:
+        raw = self._get("Actions")
+        if raw is None:
+            return None
+        return {pos: Action(raw=a) for pos, a in raw.items()}
+
+    @actions.setter
+    def actions(self, v: dict[str, Action] | None) -> None:
+        if v is None:
+            self._raw["Actions"] = None
+        else:
+            self._raw["Actions"] = {
+                pos: a.to_dict() if isinstance(a, Action) else a
+                for pos, a in v.items()
+            }
 
 
-class PageManifest(_BaseModel):
-    """Page manifest — the button grid layout."""
+class PageManifest(JsonModel):
+    @classmethod
+    def _alias_map(cls) -> dict[str, str]:
+        return {"controllers": "Controllers", "name": "Name", "icon": "Icon"}
 
-    controllers: list[Controller] = Field(alias="Controllers")
-    name: str = Field(default="", alias="Name")
-    icon: str = Field(default="", alias="Icon")
+    @property
+    def controllers(self) -> list[Controller]:
+        return [Controller(raw=c) for c in self._get("Controllers", [])]
+
+    @property
+    def name(self) -> str:
+        return self._get("Name", "")
+
+    @property
+    def icon(self) -> str:
+        return self._get("Icon", "")
 
 
 # ---------------------------------------------------------------------------
-# Lightweight summary types (not Pydantic — just for listing)
+# Lightweight summary types
 # ---------------------------------------------------------------------------
 
 @dataclass
@@ -182,7 +364,3 @@ class PageSummary:
     name: str
     button_count: int
     is_current: bool
-
-
-# Fix forward reference for ActionGroup -> Action
-ActionGroup.model_rebuild()
